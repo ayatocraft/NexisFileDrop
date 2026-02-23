@@ -36,15 +36,20 @@ button{background:linear-gradient(45deg,#6a5cff,#9b5cff);color:white}
 </div>
 
 <script>
-const params=new URLSearchParams(location.search);
-const autoFriend=params.get("to");
+window.addEventListener("DOMContentLoaded",()=>{
 
-if(autoFriend){
-  document.addEventListener("DOMContentLoaded",()=>{
-    document.getElementById("friendIdInput").value=autoFriend;
-    setTimeout(()=>startConnection(),500);
-  });
-}
+  const urlParams = new URLSearchParams(window.location.search);
+  const autoFriend = urlParams.get("to");
+
+  if(autoFriend){
+    const input = document.getElementById("friendIdInput");
+    if(input){
+      input.value = autoFriend;
+      setTimeout(()=>startConnection(),500);
+    }
+  }
+
+});
 const API_KEY="JW3Hvw.fw1o0A:-zV3VatQkBUx-hVmtwFGE6Bwbv_wG4kIoz7LHOKNawY";
 
 let myId=localStorage.getItem("nexis_id");
@@ -57,12 +62,6 @@ let ably=new Ably.Realtime(API_KEY);
 let peer,dataChannel,currentFile;
 let receivedBuffers=[],receivedSize=0;
 
-const params=new URLSearchParams(location.search);
-const autoFriend=params.get("to");
-if(autoFriend){
-  document.getElementById("friendIdInput").value=autoFriend;
-  setTimeout(()=>startConnection(),500);
-}
 
 function log(t){document.getElementById("log").innerText=t;}
 
