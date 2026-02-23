@@ -6,14 +6,11 @@
 <title>Nexis FileDrop</title>
 <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
 
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#0f0f14">
-
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f14;color:white}
 header{padding:16px;text-align:center;font-weight:600;font-size:20px;background:#111}
 .container{padding:16px}
-input,button{padding:10px;border:none;border-radius:8px}
+input,button{padding:10px;border:none;border-radius:8px;margin-top:8px}
 button{background:linear-gradient(45deg,#6a5cff,#9b5cff);color:white}
 .hidden{display:none}
 #log,#progress{margin-top:12px;font-size:12px;opacity:.7}
@@ -22,34 +19,17 @@ button{background:linear-gradient(45deg,#6a5cff,#9b5cff);color:white}
 <body>
 
 <header>Nexis FileDrop</header>
-<div class="container">
 
+<div class="container">
 <input id="friendIdInput" placeholder="相手のID" style="width:100%">
 <button onclick="startConnection()">接続</button>
 <button onclick="selectFile()">ファイル選択</button>
-
 <input type="file" id="fileInput" class="hidden">
-
 <div id="progress"></div>
 <div id="log"></div>
-
 </div>
 
 <script>
-window.addEventListener("DOMContentLoaded",()=>{
-
-  const urlParams = new URLSearchParams(window.location.search);
-  const autoFriend = urlParams.get("to");
-
-  if(autoFriend){
-    const input = document.getElementById("friendIdInput");
-    if(input){
-      input.value = autoFriend;
-      setTimeout(()=>startConnection(),500);
-    }
-  }
-
-});
 const API_KEY="JW3Hvw.fw1o0A:-zV3VatQkBUx-hVmtwFGE6Bwbv_wG4kIoz7LHOKNawY";
 
 let myId=localStorage.getItem("nexis_id");
@@ -59,56 +39,84 @@ if(!myId){
 }
 
 let ably=new Ably.Realtime(API_KEY);
-let peer,dataChannel,currentFile;
-let receivedBuffers=[],receivedSize=0;
+let peer=null;
+let dataChannel=null;
+let channel=null;
+let currentFile=null;
+let receivedBuffers=[];
+let receivedSize=0;
 
-
-function log(t){document.getElementById("log").innerText=t;}
+function log(t){
+  document.getElementById("log").innerText=t;
+}
 
 function startConnection(){
+
   const friend=document.getElementById("friendIdInput").value.trim();
-  if(!friend)return;
+  if(!friend)return alert("IDを入力");
 
   const room=[myId,friend].sort().join("-");
-  const channel=ably.channels.get("file-"+room);
+  channel=ably.channels.get("file-"+room);
 
   peer=new RTCPeerConnection();
-  dataChannel=peer.createDataChannel("file");
-  setupDataChannel();
 
+  // ICE送信
   peer.onicecandidate=e=>{
     if(e.candidate){
       channel.publish("signal",{candidate:e.candidate});
     }
   };
 
-  channel.subscribe(async msg=>{
-    const d=msg.data;
-    if(d.offer){
-      await peer.setRemoteDescription(d.offer);
-      const ans=await peer.createAnswer();
-      await peer.setLocalDescription(ans);
-      channel.publish("signal",{answer:ans});
+  // 受信
+  channel.subscribe("signal",async msg=>{
+    const data=msg.data;
+
+    if(data.offer){
+      await peer.setRemoteDescription(data.offer);
+      const answer=await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      channel.publish("signal",{answer:answer});
     }
-    if(d.answer) await peer.setRemoteDescription(d.answer);
-    if(d.candidate) try{await peer.addIceCandidate(d.candidate);}catch{}
+
+    if(data.answer){
+      await peer.setRemoteDescription(data.answer);
+    }
+
+    if(data.candidate){
+      try{
+        await peer.addIceCandidate(data.candidate);
+      }catch{}
+    }
   });
 
-  peer.ondatachannel=e=>{
-    dataChannel=e.channel;
+  // offer役決定（ID小さい側）
+  if(myId < friend){
+
+    dataChannel=peer.createDataChannel("file");
     setupDataChannel();
-  };
 
-  peer.createOffer().then(o=>{
-    peer.setLocalDescription(o);
-    channel.publish("signal",{offer:o});
-  });
+    peer.createOffer().then(offer=>{
+      peer.setLocalDescription(offer);
+      channel.publish("signal",{offer:offer});
+    });
+
+  }else{
+
+    peer.ondatachannel=e=>{
+      dataChannel=e.channel;
+      setupDataChannel();
+    };
+
+  }
 
   log("接続中...");
 }
 
 function setupDataChannel(){
-  dataChannel.onopen=()=>log("接続成功");
+
+  dataChannel.onopen=()=>{
+    log("接続成功");
+  };
 
   dataChannel.onmessage=e=>{
     if(typeof e.data==="string"){
@@ -118,8 +126,10 @@ function setupDataChannel(){
     }else{
       receivedBuffers.push(e.data);
       receivedSize+=e.data.byteLength;
+
       document.getElementById("progress").innerText=
         Math.floor(receivedSize/currentFile.size*100)+"%";
+
       if(receivedSize===currentFile.size){
         const blob=new Blob(receivedBuffers);
         const a=document.createElement("a");
@@ -139,8 +149,7 @@ function selectFile(){
 document.getElementById("fileInput").addEventListener("change",e=>{
   const file=e.target.files[0];
   if(!file||!dataChannel||dataChannel.readyState!=="open"){
-    alert("接続が必要");
-    return;
+    return alert("接続が必要");
   }
 
   dataChannel.send(JSON.stringify({name:file.name,size:file.size}));
@@ -152,8 +161,10 @@ document.getElementById("fileInput").addEventListener("change",e=>{
   reader.onload=e=>{
     dataChannel.send(e.target.result);
     offset+=e.target.result.byteLength;
+
     document.getElementById("progress").innerText=
       Math.floor(offset/file.size*100)+"%";
+
     if(offset<file.size){
       readSlice(offset);
     }else{
@@ -167,11 +178,17 @@ document.getElementById("fileInput").addEventListener("change",e=>{
   }
 
   readSlice(0);
-});
-
-if("serviceWorker" in navigator){
-  navigator.serviceWorker.register("service-worker.js");
 }
+
+// 自動接続対応
+window.addEventListener("DOMContentLoaded",()=>{
+  const params=new URLSearchParams(window.location.search);
+  const auto=params.get("to");
+  if(auto){
+    document.getElementById("friendIdInput").value=auto;
+    setTimeout(()=>startConnection(),500);
+  }
+});
 </script>
 
 </body>
