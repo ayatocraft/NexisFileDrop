@@ -3,256 +3,163 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nexis Chat</title>
-
+<title>Nexis FileDrop</title>
 <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#111111">
+<meta name="theme-color" content="#0f0f14">
 
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f14;color:white}
 header{padding:16px;text-align:center;font-weight:600;font-size:20px;background:#111}
 .container{padding:16px}
-input,button{padding:10px;border:none;border-radius:8px;font-size:14px}
-button{background:#5b7cff;color:white}
+input,button{padding:10px;border:none;border-radius:8px}
+button{background:linear-gradient(45deg,#6a5cff,#9b5cff);color:white}
 .hidden{display:none}
-#chat{height:55vh;overflow-y:auto;margin:12px 0}
-.msg{padding:8px 12px;margin:2px 0;border-radius:12px;max-width:75%;word-break:break-word}
-.me{background:#5b7cff;margin-left:auto}
-.other{background:#2a2a35}
-.row{display:flex;gap:8px;align-items:center}
-.friend{padding:10px;margin:6px 0;background:#1a1a22;border-radius:8px}
-.small{font-size:11px;opacity:0.6}
-.nameLabel{font-size:11px;opacity:0.6;margin-bottom:2px}
-a{color:#8ab4ff;text-decoration:none}
+#log,#progress{margin-top:12px;font-size:12px;opacity:.7}
 </style>
 </head>
 <body>
 
-<header>Nexis Chat</header>
+<header>Nexis FileDrop</header>
 <div class="container">
 
-<div id="setup">
-  <h3>初期設定</h3>
-  <input id="nameInput" placeholder="あなたの名前">
-  <button onclick="saveName()">保存</button>
-</div>
+<input id="friendIdInput" placeholder="相手のID" style="width:100%">
+<button onclick="startConnection()">接続</button>
+<button onclick="selectFile()">ファイル選択</button>
 
-<div id="app" class="hidden">
+<input type="file" id="fileInput" class="hidden">
 
-<!-- ===== 友達画面 ===== -->
-<div id="friendsScreen">
+<div id="progress"></div>
+<div id="log"></div>
 
-  <div class="row">
-    <div>
-      <div class="small">あなたのQR</div>
-      <div id="qr"></div>
-    </div>
-    <img src="setumei.gif" width="120" style="margin-left:12px;border-radius:8px">
-  </div>
-
-  <hr>
-
-  <div class="row">
-    <input id="friendIdInput" placeholder="友達IDを貼り付け" style="flex:1">
-    <button onclick="manualConnect()">接続</button>
-  </div>
-
-  <button onclick="openFileDrop()" style="margin-top:12px;width:100%;background:#9b5cff">
-    📎 Nexis FileDrop を開く
-  </button>
-
-  <h4>友達</h4>
-  <div id="friendList"></div>
-</div>
-
-<!-- ===== チャット画面 ===== -->
-<div id="chatScreen" class="hidden">
-  <button onclick="goFriends()" style="background:#2a2a35">← 戻る</button>
-  <h3 id="chatTitle"></h3>
-
-  <div id="chat"></div>
-
-  <div class="row">
-    <input id="msgInput" placeholder="メッセージ" style="flex:1">
-    <button onclick="sendMsg()">送信</button>
-  </div>
-
-  <button onclick="deleteFriend()" style="margin-top:10px;background:#ff4d4d">
-    友達を削除
-  </button>
-</div>
-
-</div>
 </div>
 
 <script>
 const API_KEY="YOUR_ABLY_API_KEY";
 
-let myName=localStorage.getItem("nexis_name");
 let myId=localStorage.getItem("nexis_id");
-let friends=JSON.parse(localStorage.getItem("nexis_friends")||"{}");
-let currentFriend=null;
-let ably;
-
 if(!myId){
   myId=crypto.randomUUID();
   localStorage.setItem("nexis_id",myId);
 }
 
-if(myName){ init(); }
-else{ document.getElementById("setup").style.display="block"; }
+let ably=new Ably.Realtime(API_KEY);
+let peer,dataChannel,currentFile;
+let receivedBuffers=[],receivedSize=0;
 
-function saveName(){
-  const name=document.getElementById("nameInput").value.trim();
-  if(!name) return;
-  localStorage.setItem("nexis_name",name);
-  myName=name;
-  init();
+const params=new URLSearchParams(location.search);
+const autoFriend=params.get("to");
+if(autoFriend){
+  document.getElementById("friendIdInput").value=autoFriend;
+  setTimeout(()=>startConnection(),500);
 }
 
-function init(){
-  document.getElementById("setup").style.display="none";
-  document.getElementById("app").classList.remove("hidden");
+function log(t){document.getElementById("log").innerText=t;}
 
-  new QRCode(document.getElementById("qr"),myId);
+function startConnection(){
+  const friend=document.getElementById("friendIdInput").value.trim();
+  if(!friend)return;
 
-  ably=new Ably.Realtime(API_KEY);
+  const room=[myId,friend].sort().join("-");
+  const channel=ably.channels.get("file-"+room);
 
-  const inbox=ably.channels.get("inbox-"+myId);
-  inbox.subscribe(msg=>{
-    const d=msg.data;
-    autoAddFriend(d.sender,d.senderName);
-    saveHistory(d.sender,d,false);
-    if(currentFriend===d.sender){
-      addMessage(d.text,false,d.senderName);
+  peer=new RTCPeerConnection();
+  dataChannel=peer.createDataChannel("file");
+  setupDataChannel();
+
+  peer.onicecandidate=e=>{
+    if(e.candidate){
+      channel.publish("signal",{candidate:e.candidate});
     }
-  });
-
-  renderFriends();
-}
-
-function manualConnect(){
-  const id=document.getElementById("friendIdInput").value.trim();
-  if(!id) return;
-  autoAddFriend(id,"Unknown");
-  document.getElementById("friendIdInput").value="";
-}
-
-function autoAddFriend(id,name){
-  if(!friends[id]){
-    friends[id]={name:name||"Unknown"};
-    localStorage.setItem("nexis_friends",JSON.stringify(friends));
-    renderFriends();
-  }else if(name && friends[id].name==="Unknown"){
-    friends[id].name=name;
-    localStorage.setItem("nexis_friends",JSON.stringify(friends));
-    renderFriends();
-  }
-}
-
-function renderFriends(){
-  const list=document.getElementById("friendList");
-  list.innerHTML="";
-  Object.keys(friends).forEach(id=>{
-    const div=document.createElement("div");
-    div.className="friend";
-    div.innerHTML=`
-      <strong>${friends[id].name}</strong>
-      <div class="small">${id.slice(0,8)}...</div>
-      <button onclick="openChat('${id}')">チャット</button>
-    `;
-    list.appendChild(div);
-  });
-}
-
-function openChat(id){
-  currentFriend=id;
-  document.getElementById("friendsScreen").classList.add("hidden");
-  document.getElementById("chatScreen").classList.remove("hidden");
-  document.getElementById("chatTitle").innerText=friends[id].name;
-  document.getElementById("chat").innerHTML="";
-  loadHistory(id);
-}
-
-function goFriends(){
-  currentFriend=null;
-  document.getElementById("chatScreen").classList.add("hidden");
-  document.getElementById("friendsScreen").classList.remove("hidden");
-}
-
-function sendMsg(){
-  const input=document.getElementById("msgInput");
-  const text=input.value.trim();
-  if(!text||!currentFriend) return;
-
-  const payload={
-    sender:myId,
-    senderName:myName,
-    text:text
   };
 
-  ably.channels.get("inbox-"+currentFriend).publish("message",payload);
-
-  saveHistory(currentFriend,payload,true);
-  addMessage(text,true,myName);
-  input.value="";
-}
-
-function addMessage(text,mine,name){
-  const wrapper=document.createElement("div");
-
-  const label=document.createElement("div");
-  label.className="nameLabel";
-  label.innerText=name;
-
-  const bubble=document.createElement("div");
-  bubble.className="msg "+(mine?"me":"other");
-  bubble.innerHTML=autoLink(text);
-
-  wrapper.appendChild(label);
-  wrapper.appendChild(bubble);
-
-  document.getElementById("chat").appendChild(wrapper);
-  document.getElementById("chat").scrollTop=999999;
-}
-
-function autoLink(text){
-  const urlRegex=/((https?:\/\/)?([\w-]+\.)+[\w-]+(\/[\w-./?%&=]*)?)/g;
-  return text.replace(urlRegex,function(url){
-    let link=url;
-    if(!url.startsWith("http")) link="https://"+url;
-    return `<a href="${link}" target="_blank">${url}</a>`;
+  channel.subscribe(async msg=>{
+    const d=msg.data;
+    if(d.offer){
+      await peer.setRemoteDescription(d.offer);
+      const ans=await peer.createAnswer();
+      await peer.setLocalDescription(ans);
+      channel.publish("signal",{answer:ans});
+    }
+    if(d.answer) await peer.setRemoteDescription(d.answer);
+    if(d.candidate) try{await peer.addIceCandidate(d.candidate);}catch{}
   });
+
+  peer.ondatachannel=e=>{
+    dataChannel=e.channel;
+    setupDataChannel();
+  };
+
+  peer.createOffer().then(o=>{
+    peer.setLocalDescription(o);
+    channel.publish("signal",{offer:o});
+  });
+
+  log("接続中...");
 }
 
-function saveHistory(friend,data,mine){
-  let history=JSON.parse(localStorage.getItem("chat_"+friend)||"[]");
-  history.push({text:data.text,mine:mine,name:data.senderName});
-  localStorage.setItem("chat_"+friend,JSON.stringify(history));
+function setupDataChannel(){
+  dataChannel.onopen=()=>log("接続成功");
+
+  dataChannel.onmessage=e=>{
+    if(typeof e.data==="string"){
+      currentFile=JSON.parse(e.data);
+      receivedBuffers=[];
+      receivedSize=0;
+    }else{
+      receivedBuffers.push(e.data);
+      receivedSize+=e.data.byteLength;
+      document.getElementById("progress").innerText=
+        Math.floor(receivedSize/currentFile.size*100)+"%";
+      if(receivedSize===currentFile.size){
+        const blob=new Blob(receivedBuffers);
+        const a=document.createElement("a");
+        a.href=URL.createObjectURL(blob);
+        a.download=currentFile.name;
+        a.click();
+        log("受信完了");
+      }
+    }
+  };
 }
 
-function loadHistory(friend){
-  let history=JSON.parse(localStorage.getItem("chat_"+friend)||"[]");
-  history.forEach(m=>addMessage(m.text,m.mine,m.name));
+function selectFile(){
+  document.getElementById("fileInput").click();
 }
 
-function deleteFriend(){
-  if(!currentFriend) return;
-  if(confirm("この友達とチャット履歴を完全削除しますか？")){
-    delete friends[currentFriend];
-    localStorage.removeItem("chat_"+currentFriend);
-    localStorage.setItem("nexis_friends",JSON.stringify(friends));
-    goFriends();
-    renderFriends();
+document.getElementById("fileInput").addEventListener("change",e=>{
+  const file=e.target.files[0];
+  if(!file||!dataChannel||dataChannel.readyState!=="open"){
+    alert("接続が必要");
+    return;
   }
-}
 
-function openFileDrop(){
-  window.location.href="https://ayatocraft.github.io/NexisFileDrop";
-}
+  dataChannel.send(JSON.stringify({name:file.name,size:file.size}));
+
+  const chunkSize=16384;
+  let offset=0;
+  const reader=new FileReader();
+
+  reader.onload=e=>{
+    dataChannel.send(e.target.result);
+    offset+=e.target.result.byteLength;
+    document.getElementById("progress").innerText=
+      Math.floor(offset/file.size*100)+"%";
+    if(offset<file.size){
+      readSlice(offset);
+    }else{
+      log("送信完了");
+    }
+  };
+
+  function readSlice(o){
+    const slice=file.slice(o,o+chunkSize);
+    reader.readAsArrayBuffer(slice);
+  }
+
+  readSlice(0);
+});
 
 if("serviceWorker" in navigator){
   navigator.serviceWorker.register("service-worker.js");
