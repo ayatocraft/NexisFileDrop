@@ -36,7 +36,16 @@ button{background:linear-gradient(45deg,#6a5cff,#9b5cff);color:white}
 </div>
 
 <script>
-const API_KEY="YOUR_ABLY_API_KEY";
+const params=new URLSearchParams(location.search);
+const autoFriend=params.get("to");
+
+if(autoFriend){
+  document.addEventListener("DOMContentLoaded",()=>{
+    document.getElementById("friendIdInput").value=autoFriend;
+    setTimeout(()=>startConnection(),500);
+  });
+}
+const API_KEY="JW3Hvw.fw1o0A:-zV3VatQkBUx-hVmtwFGE6Bwbv_wG4kIoz7LHOKNawY";
 
 let myId=localStorage.getItem("nexis_id");
 if(!myId){
