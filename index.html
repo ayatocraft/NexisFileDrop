@@ -69,7 +69,13 @@ if(autoTo){
   document.getElementById("peerIdInput").value=autoTo;
 }
 
-peer=new Peer();
+const chatId = localStorage.getItem("nexis_id");
+
+if(!chatId){
+  alert("Chatを先に開いてください");
+}
+
+peer = new Peer(chatId);
 
 peer.on("open",id=>{
   document.getElementById("myId").innerText=id;
