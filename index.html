@@ -6,23 +6,22 @@
 <title>Nexis FileDrop</title>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-
+<link rel="manifest" href="manifest.json">
 <style>
 body{
   margin:0;
-  font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+  font-family:-apple-system;
   background:#0f0f14;
   color:white;
   text-align:center;
   padding:20px;
 }
-h1{margin-bottom:10px}
 .card{
   background:#1a1a22;
   padding:20px;
   border-radius:12px;
   margin:15px auto;
-  max-width:400px;
+  max-width:420px;
 }
 input,button{
   padding:10px;
@@ -30,27 +29,14 @@ input,button{
   border-radius:8px;
   font-size:14px;
 }
-input{
-  width:70%;
-}
-button{
-  background:#5b7cff;
-  color:white;
-  cursor:pointer;
-}
-button:disabled{
-  opacity:0.5;
-}
-.status{
-  font-size:13px;
-  opacity:0.7;
-  margin-top:10px;
-}
+button{background:#5b7cff;color:white;cursor:pointer}
+button:disabled{opacity:0.5}
+.status{font-size:13px;opacity:0.7;margin-top:10px}
 </style>
 </head>
 <body>
 
-<h1>Nexis FileDrop</h1>
+<h2>Nexis FileDrop</h2>
 
 <div class="card">
   <div><strong>あなたのID</strong></div>
@@ -59,81 +45,80 @@ button:disabled{
 
 <div class="card">
   <div><strong>接続先ID</strong></div>
-  <input id="peerIdInput" placeholder="相手のID">
+  <input id="peerIdInput">
   <button onclick="connectPeer()">接続</button>
   <div class="status" id="connStatus">未接続</div>
 </div>
 
 <div class="card">
-  <div><strong>ファイル送信</strong></div>
   <input type="file" id="fileInput">
   <br><br>
-  <button onclick="sendFile()" id="sendBtn" disabled>送信</button>
+  <button id="sendBtn" onclick="sendFile()" disabled>送信</button>
   <div class="status" id="fileStatus"></div>
 </div>
 
 <script>
 let peer;
 let conn;
-let myId;
 let connected=false;
 
-// URLパラメータ取得（自動入力のみ）
-const params = new URLSearchParams(location.search);
-const autoTo = params.get("to");
-
+const params=new URLSearchParams(location.search);
+const autoTo=params.get("to");
 if(autoTo){
-  document.getElementById("peerIdInput").value = autoTo;
+  document.getElementById("peerIdInput").value=autoTo;
 }
 
-// Peer初期化（デフォルトサーバー）
-peer = new Peer();
+peer=new Peer();
 
-peer.on("open", id=>{
-  myId=id;
+peer.on("open",id=>{
   document.getElementById("myId").innerText=id;
 });
 
-peer.on("connection", connection=>{
-  conn=connection;
+peer.on("connection",c=>{
+  conn=c;
   setupConnection();
+});
+
+peer.on("error",err=>{
+  document.getElementById("connStatus").innerText="エラー: "+err.type;
 });
 
 function connectPeer(){
   const target=document.getElementById("peerIdInput").value.trim();
-  if(!target) return;
+  if(!target)return;
 
-  conn=peer.connect(target);
+  document.getElementById("connStatus").innerText="接続試行中...";
+  conn=peer.connect(target,{reliable:true});
   setupConnection();
 }
 
 function setupConnection(){
-  document.getElementById("connStatus").innerText="接続中...";
-
-  conn.on("open", ()=>{
+  conn.on("open",()=>{
     connected=true;
-    document.getElementById("connStatus").innerText="接続済み";
+    document.getElementById("connStatus").innerText="接続成功";
     document.getElementById("sendBtn").disabled=false;
   });
 
-  conn.on("data", data=>{
-    if(data.type==="file"){
-      receiveFile(data);
-    }
+  conn.on("data",data=>{
+    handleData(data);
   });
 
-  conn.on("close", ()=>{
+  conn.on("close",()=>{
     connected=false;
     document.getElementById("connStatus").innerText="切断";
     document.getElementById("sendBtn").disabled=true;
   });
+
+  conn.on("error",()=>{
+    document.getElementById("connStatus").innerText="接続失敗";
+  });
 }
 
 function sendFile(){
-  if(!connected) return;
+  if(!connected)return;
 
   const file=document.getElementById("fileInput").files[0];
-  if(!file) return;
+  if(!file)return;
 
   const reader=new FileReader();
 
@@ -141,6 +126,7 @@ function sendFile(){
     conn.send({
       type:"file",
       name:file.name,
+      size:file.size,
       data:reader.result
     });
     document.getElementById("fileStatus").innerText="送信完了";
@@ -149,14 +135,20 @@ function sendFile(){
   reader.readAsDataURL(file);
 }
 
+function handleData(data){
+  if(data.type==="file"){
+    receiveFile(data);
+  }
+}
+
 function receiveFile(data){
+  document.getElementById("fileStatus").innerText=
+    "受信: "+data.name+" ("+Math.round(data.size/1024)+"KB)";
+
   const a=document.createElement("a");
   a.href=data.data;
   a.download=data.name;
   a.click();
-
-  document.getElementById("fileStatus").innerText=
-    "受信: "+data.name;
 }
 </script>
 
