@@ -4,206 +4,160 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nexis FileDrop</title>
-<script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
 <style>
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f14;color:white}
-header{padding:16px;text-align:center;font-weight:600;font-size:20px;background:#111}
-.container{padding:16px}
-input,button{padding:10px;border:none;border-radius:8px;margin-top:8px}
-button{background:linear-gradient(45deg,#6a5cff,#9b5cff);color:white}
-.hidden{display:none}
-#log,#progress{margin-top:12px;font-size:12px;opacity:.8}
-.box{background:#1a1a22;padding:12px;border-radius:8px;margin-bottom:16px;font-size:13px;line-height:1.6}
-.success{color:#5cff9b}
+body{
+  margin:0;
+  font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+  background:#0f0f14;
+  color:white;
+  text-align:center;
+  padding:20px;
+}
+h1{margin-bottom:10px}
+.card{
+  background:#1a1a22;
+  padding:20px;
+  border-radius:12px;
+  margin:15px auto;
+  max-width:400px;
+}
+input,button{
+  padding:10px;
+  border:none;
+  border-radius:8px;
+  font-size:14px;
+}
+input{
+  width:70%;
+}
+button{
+  background:#5b7cff;
+  color:white;
+  cursor:pointer;
+}
+button:disabled{
+  opacity:0.5;
+}
+.status{
+  font-size:13px;
+  opacity:0.7;
+  margin-top:10px;
+}
 </style>
 </head>
 <body>
 
-<header>Nexis FileDrop</header>
+<h1>Nexis FileDrop</h1>
 
-<div class="container">
-
-<div class="box">
-<b>使い方</b><br>
-① Chatから「この友達にFileDrop」を押す<br>
-② 自動接続されます<br>
-③ どちらかが「ファイル選択」<br>
-④ 相手側は自動ダウンロード<br>
-※ 1対1リアルタイム送信です
+<div class="card">
+  <div><strong>あなたのID</strong></div>
+  <div id="myId">生成中...</div>
 </div>
 
-<input id="friendIdInput" placeholder="相手のID" style="width:100%">
-<button onclick="startConnection()">接続</button>
-<button onclick="selectFile()">ファイル選択</button>
-<input type="file" id="fileInput" class="hidden">
+<div class="card">
+  <div><strong>接続先ID</strong></div>
+  <input id="peerIdInput" placeholder="相手のID">
+  <button onclick="connectPeer()">接続</button>
+  <div class="status" id="connStatus">未接続</div>
+</div>
 
-<div id="progress"></div>
-<div id="log"></div>
-
+<div class="card">
+  <div><strong>ファイル送信</strong></div>
+  <input type="file" id="fileInput">
+  <br><br>
+  <button onclick="sendFile()" id="sendBtn" disabled>送信</button>
+  <div class="status" id="fileStatus"></div>
 </div>
 
 <script>
-const API_KEY="JW3Hvw.fw1o0A:-zV3VatQkBUx-hVmtwFGE6Bwbv_wG4kIoz7LHOKNawY";
+let peer;
+let conn;
+let myId;
+let connected=false;
 
-let myId=localStorage.getItem("nexis_id");
-if(!myId){
-  myId=crypto.randomUUID();
-  localStorage.setItem("nexis_id",myId);
+// URLパラメータ取得（自動入力のみ）
+const params = new URLSearchParams(location.search);
+const autoTo = params.get("to");
+
+if(autoTo){
+  document.getElementById("peerIdInput").value = autoTo;
 }
 
-let ably=new Ably.Realtime(API_KEY);
-let peer=null;
-let dataChannel=null;
-let channel=null;
+// Peer初期化（デフォルトサーバー）
+peer = new Peer();
 
-function log(t,className=""){
-  const el=document.getElementById("log");
-  el.className=className;
-  el.innerText=t;
+peer.on("open", id=>{
+  myId=id;
+  document.getElementById("myId").innerText=id;
+});
+
+peer.on("connection", connection=>{
+  conn=connection;
+  setupConnection();
+});
+
+function connectPeer(){
+  const target=document.getElementById("peerIdInput").value.trim();
+  if(!target) return;
+
+  conn=peer.connect(target);
+  setupConnection();
 }
 
-function startConnection(){
+function setupConnection(){
+  document.getElementById("connStatus").innerText="接続中...";
 
-  const friend=document.getElementById("friendIdInput").value.trim();
-  if(!friend) return alert("IDを入力");
-
-  const room=[myId,friend].sort().join("-");
-  channel=ably.channels.get("file-"+room);
-
-  peer=new RTCPeerConnection({
-    iceServers:[{urls:"stun:stun.l.google.com:19302"}]
+  conn.on("open", ()=>{
+    connected=true;
+    document.getElementById("connStatus").innerText="接続済み";
+    document.getElementById("sendBtn").disabled=false;
   });
 
-  peer.onicecandidate=e=>{
-    if(e.candidate){
-      channel.publish("signal",{candidate:e.candidate});
-    }
-  };
-
-  channel.subscribe("signal",async msg=>{
-    const d=msg.data;
-
-    if(d.offer){
-      await peer.setRemoteDescription(d.offer);
-      const answer=await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-      channel.publish("signal",{answer:answer});
-    }
-
-    if(d.answer){
-      await peer.setRemoteDescription(d.answer);
-    }
-
-    if(d.candidate){
-      try{ await peer.addIceCandidate(d.candidate);}catch{}
+  conn.on("data", data=>{
+    if(data.type==="file"){
+      receiveFile(data);
     }
   });
 
-  if(myId < friend){
-    dataChannel=peer.createDataChannel("file");
-    setupChannel();
-
-    peer.createOffer().then(o=>{
-      peer.setLocalDescription(o);
-      channel.publish("signal",{offer:o});
-    });
-
-  }else{
-    peer.ondatachannel=e=>{
-      dataChannel=e.channel;
-      setupChannel();
-    };
-  }
-
-  log("接続中...");
+  conn.on("close", ()=>{
+    connected=false;
+    document.getElementById("connStatus").innerText="切断";
+    document.getElementById("sendBtn").disabled=true;
+  });
 }
 
-function setupChannel(){
+function sendFile(){
+  if(!connected) return;
 
-  dataChannel.onopen=()=>{
-    log("接続成功", "success");
-  };
+  const file=document.getElementById("fileInput").files[0];
+  if(!file) return;
 
-  let currentFile;
-  let receivedBuffers=[];
-  let receivedSize=0;
-
-  dataChannel.onmessage=e=>{
-    if(typeof e.data==="string"){
-      currentFile=JSON.parse(e.data);
-      receivedBuffers=[];
-      receivedSize=0;
-    }else{
-      receivedBuffers.push(e.data);
-      receivedSize+=e.data.byteLength;
-
-      document.getElementById("progress").innerText=
-        Math.floor(receivedSize/currentFile.size*100)+"%";
-
-      if(receivedSize===currentFile.size){
-        const blob=new Blob(receivedBuffers);
-        const a=document.createElement("a");
-        a.href=URL.createObjectURL(blob);
-        a.download=currentFile.name;
-        a.click();
-        log("受信完了", "success");
-      }
-    }
-  };
-}
-
-function selectFile(){
-  document.getElementById("fileInput").click();
-}
-
-document.getElementById("fileInput").addEventListener("change",e=>{
-  const file=e.target.files[0];
-  if(!file || !dataChannel || dataChannel.readyState!=="open"){
-    return alert("接続が必要");
-  }
-
-  dataChannel.send(JSON.stringify({name:file.name,size:file.size}));
-
-  const chunkSize=16384;
-  let offset=0;
   const reader=new FileReader();
 
-  reader.onload=e=>{
-    dataChannel.send(e.target.result);
-    offset+=e.target.result.byteLength;
-
-    document.getElementById("progress").innerText=
-      Math.floor(offset/file.size*100)+"%";
-
-    if(offset<file.size){
-      readSlice(offset);
-    }else{
-      log("送信完了", "success");
-    }
+  reader.onload=()=>{
+    conn.send({
+      type:"file",
+      name:file.name,
+      data:reader.result
+    });
+    document.getElementById("fileStatus").innerText="送信完了";
   };
 
-  function readSlice(o){
-    reader.readAsArrayBuffer(file.slice(o,o+chunkSize));
-  }
+  reader.readAsDataURL(file);
+}
 
-  readSlice(0);
-});
+function receiveFile(data){
+  const a=document.createElement("a");
+  a.href=data.data;
+  a.download=data.name;
+  a.click();
 
-// 🔥 Chatからの自動入力対応（確実版）
-window.addEventListener("load",()=>{
-  const params=new URLSearchParams(window.location.search);
-  const auto=params.get("to");
-
-  if(auto){
-    document.getElementById("friendIdInput").value=auto;
-
-    // Ably接続待ち
-    ably.connection.once("connected",()=>{
-      setTimeout(()=>startConnection(),500);
-    });
-  }
-});
+  document.getElementById("fileStatus").innerText=
+    "受信: "+data.name;
+}
 </script>
 
 </body>
